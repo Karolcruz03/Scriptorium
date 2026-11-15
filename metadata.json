@@ -1,0 +1,6 @@
+{
+  "name": "Scriptorium — Archival Paleography & HTR",
+  "description": "Handwritten text recognition and diplomatic transcription workbench for historical Spanish, Latin, and English archival manuscripts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
