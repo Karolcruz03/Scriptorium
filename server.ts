@@ -160,7 +160,7 @@ function formatGeminiError(err: unknown): { status: number; message: string } {
 async function startServer() {
   const app = express();
 
-  app.use(express.json({ limit: "25mb" }));
+  app.use(express.json({ limit: "50mb" }));
 
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
@@ -194,14 +194,17 @@ async function startServer() {
     const customInstruction = (body.customInstruction ?? "").trim().slice(0, 600);
 
     let clientAborted = false;
-    req.on("close", () => {
-      clientAborted = true;
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        clientAborted = true;
+      }
     });
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
+    res.write(": connected\n\n");
 
     const sendEvent = (payload: Record<string, unknown>) => {
       if (!res.writableEnded) {
@@ -243,15 +246,26 @@ async function startServer() {
         },
       });
 
+      let emittedChars = 0;
       for await (const chunk of stream) {
         if (clientAborted) break;
         if (chunk.text) {
+          emittedChars += chunk.text.length;
           sendEvent({ text: chunk.text });
         }
       }
 
       if (!clientAborted) {
-        sendEvent({ done: true });
+        if (emittedChars === 0) {
+          sendEvent({
+            error:
+              uiLang === "es"
+                ? "No se pudo extraer texto legible de esta imagen. Verifique que el archivo contenga un manuscrito nítido."
+                : "No readable text could be extracted from this image. Please verify the manuscript scan is clear.",
+          });
+        } else {
+          sendEvent({ done: true });
+        }
       }
       res.end();
     } catch (err) {

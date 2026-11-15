@@ -237,6 +237,36 @@ export default function App() {
       let buffer = "";
       let accumulated = "";
 
+      const processEventChunk = (eventChunk: string) => {
+        const lines = eventChunk.split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const rawJson = line.slice(6).trim();
+          if (!rawJson) continue;
+          try {
+            const parsed = JSON.parse(rawJson) as {
+              text?: string;
+              done?: boolean;
+              error?: string;
+            };
+            if (parsed.error) {
+              throw new Error(parsed.error);
+            }
+            if (parsed.text) {
+              accumulated += parsed.text;
+              setTranscriptionText(accumulated);
+            }
+          } catch (parseErr) {
+            if (
+              parseErr instanceof Error &&
+              parseErr.message !== "Unexpected end of JSON input"
+            ) {
+              throw parseErr;
+            }
+          }
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -246,34 +276,12 @@ export default function App() {
         buffer = events.pop() ?? "";
 
         for (const eventChunk of events) {
-          const lines = eventChunk.split("\n");
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const rawJson = line.slice(6).trim();
-            if (!rawJson) continue;
-            try {
-              const parsed = JSON.parse(rawJson) as {
-                text?: string;
-                done?: boolean;
-                error?: string;
-              };
-              if (parsed.error) {
-                throw new Error(parsed.error);
-              }
-              if (parsed.text) {
-                accumulated += parsed.text;
-                setTranscriptionText(accumulated);
-              }
-            } catch (parseErr) {
-              if (
-                parseErr instanceof Error &&
-                parseErr.message !== "Unexpected end of JSON input"
-              ) {
-                throw parseErr;
-              }
-            }
-          }
+          processEventChunk(eventChunk);
         }
+      }
+
+      if (buffer.trim()) {
+        processEventChunk(buffer);
       }
 
       if (accumulated.trim()) {
@@ -289,6 +297,8 @@ export default function App() {
             : localizedActiveDoc.imageUrl,
         };
         setHistory((prev) => [newRecord, ...prev].slice(0, 20));
+      } else {
+        setError(t.errors.emptyStream);
       }
     } catch (err) {
       if ((err as Error)?.name === "AbortError") {
