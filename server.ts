@@ -1,5 +1,6 @@
 import "dotenv/config";
-import express, { Request, Response } from "express";
+import express from "express";
+import type { NextFunction, Request, Response } from "express";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -8,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB
 
 const PALEOGRAPHER_SYSTEM_INSTRUCTION = `You are an expert paleographer, historian, and advanced Handwritten Text Recognition (HTR) AI. Your task is to accurately transcribe digitized handwritten documents, letters, manuscripts, and archival texts provided as images.
 
@@ -24,6 +26,15 @@ Guidelines for transcription:
 type LanguageHint = "auto" | "spanish" | "english" | "latin";
 type TranscriptionMode = "diplomatic" | "normalized" | "translation" | "analysis";
 type UiLang = "es" | "en";
+type ServerErrorCode =
+  | "RATE_LIMIT_RPM"
+  | "QUOTA_EXHAUSTED_RPD"
+  | "FILE_TOO_LARGE"
+  | "UNSUPPORTED_FORMAT"
+  | "FILE_READ_FAILED"
+  | "API_KEY_INVALID"
+  | "EMPTY_OUTPUT"
+  | "TRANSCRIPTION_FAILED";
 
 interface TranscribeRequestBody {
   imageBase64?: string;
@@ -34,6 +45,13 @@ interface TranscribeRequestBody {
   preserveLineBreaks?: boolean;
   includeMarginalia?: boolean;
   customInstruction?: string;
+}
+
+interface ClassifiedError {
+  status: number;
+  code: ServerErrorCode;
+  message: string;
+  retryAfterSeconds?: number;
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -125,42 +143,150 @@ function buildUserPrompt(opts: {
   return parts.join("\n\n");
 }
 
-function formatGeminiError(err: unknown): { status: number; message: string } {
-  const raw = err instanceof Error ? err.message : String(err);
-  if (raw.includes("GEMINI_API_KEY")) {
+function extractRetrySeconds(rawText: string): number {
+  const retryInMatch = rawText.match(/retry\s+(?:in|after)\s+(\d+(?:\.\d+)?)\s*s/i);
+  if (retryInMatch) {
+    return Math.max(5, Math.min(300, Math.ceil(Number(retryInMatch[1]))));
+  }
+  const retryDelayMatch = rawText.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i);
+  if (retryDelayMatch) {
+    return Math.max(5, Math.min(300, Math.ceil(Number(retryDelayMatch[1]))));
+  }
+  return 60;
+}
+
+function classifyGeminiError(err: unknown, uiLang: UiLang): ClassifiedError {
+  const errObj = (typeof err === "object" && err !== null ? err : {}) as Record<string, unknown>;
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  let serialized = rawMessage;
+  try {
+    serialized = `${rawMessage} ${JSON.stringify(errObj)}`;
+  } catch {
+    // Keep rawMessage
+  }
+  const lower = serialized.toLowerCase();
+  const numericStatus = typeof errObj.status === "number" ? errObj.status : 0;
+
+  if (rawMessage.includes("GEMINI_API_KEY")) {
     return {
       status: 500,
-      message: "Gemini API key is not configured. Please check the Secrets panel.",
+      code: "API_KEY_INVALID",
+      message:
+        uiLang === "es"
+          ? "La clave de API de Gemini no está configurada en el servidor. Revisa el panel Settings > Secrets."
+          : "Gemini API key is not configured on the server. Check Settings > Secrets.",
     };
   }
-  if (raw.includes("PERMISSION_DENIED") || raw.includes("API_KEY_INVALID") || raw.includes("403")) {
+
+  if (
+    numericStatus === 401 ||
+    numericStatus === 403 ||
+    lower.includes("permission_denied") ||
+    lower.includes("api_key_invalid")
+  ) {
     return {
       status: 403,
-      message: "Invalid or unauthorized API key. Verify your key in the Settings > Secrets panel.",
+      code: "API_KEY_INVALID",
+      message:
+        uiLang === "es"
+          ? "La clave de API no es válida o no tiene permisos. Verifica Settings > Secrets."
+          : "Invalid or unauthorized API key. Verify your key in Settings > Secrets.",
     };
   }
-  if (raw.includes("RESOURCE_EXHAUSTED") || raw.includes("429")) {
+
+  const isRateOrQuota =
+    numericStatus === 429 ||
+    lower.includes("429") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("too many requests") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("rate limit") ||
+    lower.includes("ratelimit");
+
+  if (isRateOrQuota) {
+    const isDailyRpd =
+      lower.includes("perday") ||
+      lower.includes("requestsperday") ||
+      lower.includes("per_day") ||
+      lower.includes("rpd") ||
+      lower.includes("daily") ||
+      lower.includes("generaterequestsperday");
+
+    if (isDailyRpd) {
+      return {
+        status: 429,
+        code: "QUOTA_EXHAUSTED_RPD",
+        message:
+          uiLang === "es"
+            ? "Se ha alcanzado el límite diario de transcripciones gratuitas de la API. Podrás continuar mañana cuando se renueve la cuota."
+            : "The daily free API transcription limit has been reached. You can continue tomorrow when the quota resets.",
+      };
+    }
+
+    const retryAfterSeconds = extractRetrySeconds(serialized);
     return {
       status: 429,
-      message: "API rate limit or quota reached. Please try again shortly.",
+      code: "RATE_LIMIT_RPM",
+      retryAfterSeconds,
+      message:
+        uiLang === "es"
+          ? `Límite por minuto alcanzado. Disponible en ${retryAfterSeconds} segundos.`
+          : `Per-minute rate limit reached. Available in ${retryAfterSeconds} seconds.`,
     };
   }
-  if (raw.includes("NOT_FOUND") || raw.includes("404")) {
+
+  if (numericStatus === 404 || lower.includes("not_found")) {
     return {
       status: 404,
-      message: "The requested Gemini model was not found.",
+      code: "TRANSCRIPTION_FAILED",
+      message:
+        uiLang === "es"
+          ? "No se encontró el modelo de transcripción configurado en la API."
+          : "The configured Gemini model was not found.",
     };
   }
+
   return {
     status: 500,
-    message: raw || "Failed to transcribe manuscript.",
+    code: "TRANSCRIPTION_FAILED",
+    message:
+      rawMessage ||
+      (uiLang === "es"
+        ? "No se pudo completar la transcripción del manuscrito."
+        : "Failed to transcribe manuscript."),
   };
 }
 
 async function startServer() {
   const app = express();
 
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({ limit: "30mb" }));
+
+  // Intercept oversized payloads / invalid JSON from express.json
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    const errObj = (typeof err === "object" && err !== null ? err : {}) as Record<string, unknown>;
+    if (errObj.type === "entity.too.large" || errObj.status === 413) {
+      const uiLang: UiLang = req.headers["x-ui-lang"] === "en" ? "en" : "es";
+      res.status(413).json({
+        error:
+          uiLang === "es"
+            ? "El archivo supera el tamaño máximo permitido (20 MB)."
+            : "File exceeds the maximum allowed size (20 MB).",
+        code: "FILE_TOO_LARGE",
+        status: 413,
+      });
+      return;
+    }
+    if (err instanceof SyntaxError && errObj.status === 400) {
+      res.status(400).json({
+        error: "Invalid request payload.",
+        code: "FILE_READ_FAILED",
+        status: 400,
+      });
+      return;
+    }
+    next(err);
+  });
 
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ ok: true });
@@ -168,27 +294,53 @@ async function startServer() {
 
   app.post("/api/transcribe", async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as TranscribeRequestBody;
+    const uiLang: UiLang = body.uiLang === "en" ? "en" : "es";
     const rawBase64 = body.imageBase64?.trim();
     const mimeType = body.mimeType?.trim() || "image/jpeg";
 
     if (!rawBase64) {
-      res.status(400).json({ error: "No manuscript image provided." });
+      res.status(400).json({
+        error:
+          uiLang === "es"
+            ? "No se recibió ninguna imagen del folio."
+            : "No manuscript image provided.",
+        code: "FILE_READ_FAILED",
+        status: 400,
+      });
       return;
     }
 
     const allowedMimeTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
     const normalizedMime = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
     if (!allowedMimeTypes.includes(mimeType)) {
-      res.status(400).json({ error: `Unsupported image format: ${mimeType}. Use JPEG, PNG, WEBP, or GIF.` });
+      res.status(400).json({
+        error:
+          uiLang === "es"
+            ? "Formato no válido. Sube imágenes JPG, PNG, WEBP o GIF."
+            : `Unsupported image format: ${mimeType}. Please upload JPG, PNG, WEBP, or GIF.`,
+        code: "UNSUPPORTED_FORMAT",
+        status: 400,
+      });
       return;
     }
 
     // Strip potential data URI prefix if caller sent one
     const cleanBase64 = rawBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "");
+    const approxBytes = Math.floor((cleanBase64.length * 3) / 4);
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      res.status(413).json({
+        error:
+          uiLang === "es"
+            ? "El archivo supera el tamaño máximo permitido (20 MB)."
+            : "The file exceeds the maximum allowed size (20 MB).",
+        code: "FILE_TOO_LARGE",
+        status: 413,
+      });
+      return;
+    }
 
     const language: LanguageHint = body.language ?? "auto";
     const mode: TranscriptionMode = body.mode ?? "diplomatic";
-    const uiLang: UiLang = body.uiLang === "en" ? "en" : "es";
     const preserveLineBreaks = body.preserveLineBreaks !== false;
     const includeMarginalia = body.includeMarginalia !== false;
     const customInstruction = (body.customInstruction ?? "").trim().slice(0, 600);
@@ -200,18 +352,13 @@ async function startServer() {
       }
     });
 
-    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders?.();
-    res.write(": connected\n\n");
-
     const sendEvent = (payload: Record<string, unknown>) => {
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
       }
     };
 
+    let stream: Awaited<ReturnType<GoogleGenAI["models"]["generateContentStream"]>>;
     try {
       const ai = getGeminiClient();
       const prompt = buildUserPrompt({
@@ -223,7 +370,7 @@ async function startServer() {
         customInstruction,
       });
 
-      const stream = await ai.models.generateContentStream({
+      stream = await ai.models.generateContentStream({
         model: "gemini-4-hydrogen",
         contents: {
           parts: [
@@ -245,7 +392,28 @@ async function startServer() {
           },
         },
       });
+    } catch (err) {
+      const classified = classifyGeminiError(err, uiLang);
+      if (classified.retryAfterSeconds) {
+        res.setHeader("Retry-After", String(classified.retryAfterSeconds));
+      }
+      res.status(classified.status).json({
+        error: classified.message,
+        code: classified.code,
+        status: classified.status,
+        retryAfterSeconds: classified.retryAfterSeconds,
+      });
+      return;
+    }
 
+    // Stream started successfully — switch to SSE
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+    res.write(": connected\n\n");
+
+    try {
       let emittedChars = 0;
       for await (const chunk of stream) {
         if (clientAborted) break;
@@ -262,6 +430,8 @@ async function startServer() {
               uiLang === "es"
                 ? "No se pudo extraer texto legible de esta imagen. Verifique que el archivo contenga un manuscrito nítido."
                 : "No readable text could be extracted from this image. Please verify the manuscript scan is clear.",
+            code: "EMPTY_OUTPUT",
+            status: 200,
           });
         } else {
           sendEvent({ done: true });
@@ -269,8 +439,13 @@ async function startServer() {
       }
       res.end();
     } catch (err) {
-      const formatted = formatGeminiError(err);
-      sendEvent({ error: formatted.message, status: formatted.status });
+      const classified = classifyGeminiError(err, uiLang);
+      sendEvent({
+        error: classified.message,
+        code: classified.code,
+        status: classified.status,
+        retryAfterSeconds: classified.retryAfterSeconds,
+      });
       res.end();
     }
   });

@@ -72,6 +72,24 @@ export interface UiDictionary {
     copyText: string;
     copied: string;
   };
+  quota: {
+    available: string;
+    rpmPaused: string;
+    rpdExhausted: string;
+    sessionCountLabel: string;
+    rpmBannerTitle: string;
+    rpmBannerBody: string;
+    rpdBannerTitle: string;
+    rpdBannerBody: string;
+    rpdRecheck: string;
+    waitButton: string;
+  };
+  toasts: {
+    dismiss: string;
+    uploadFailedTitle: string;
+    networkErrorTitle: string;
+    rateLimitTitle: string;
+  };
   specimensSection: {
     kicker: string;
     title: string;
@@ -103,8 +121,10 @@ export interface UiDictionary {
   };
   errors: {
     invalidFileType: string;
+    fileTooLarge: string;
     loadFileError: string;
     emptyStream: string;
+    networkError: string;
     unexpectedError: string;
   };
   uploadMeta: {
@@ -160,7 +180,7 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
         "No se pudo renderizar esta imagen archivística. Arrastre un nuevo escaneo aquí o cargue un archivo.",
       selectFile: "Seleccionar manuscrito",
       dropTitle: "Suelte el manuscrito para inspeccionarlo",
-      dropSubtitle: "Admite imágenes archivísticas JPG, PNG, WEBP y GIF",
+      dropSubtitle: "Admite imágenes archivísticas JPG, PNG, WEBP y GIF (máx. 20 MB)",
       replaceImage: "Reemplazar imagen",
     },
     desk: {
@@ -214,6 +234,26 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
       deriveAnalysis: "Análisis histórico",
       copyText: "Copiar texto",
       copied: "Copiado",
+    },
+    quota: {
+      available: "API Disponible",
+      rpmPaused: "En pausa por límite",
+      rpdExhausted: "Cuota diaria agotada",
+      sessionCountLabel: "Folios en sesión",
+      rpmBannerTitle: "Límite por minuto alcanzado",
+      rpmBannerBody:
+        "Has superado el límite de solicitudes por minuto de la API. Disponible en {seconds} segundos…",
+      rpdBannerTitle: "Cuota diaria gratuita agotada",
+      rpdBannerBody:
+        "Se ha alcanzado el límite diario de transcripciones gratuitas de la API. Podrás continuar mañana cuando se renueve la cuota.",
+      rpdRecheck: "Verificar disponibilidad",
+      waitButton: "Espera {seconds}s",
+    },
+    toasts: {
+      dismiss: "Cerrar notificación",
+      uploadFailedTitle: "No se pudo cargar el folio",
+      networkErrorTitle: "Error de conexión",
+      rateLimitTitle: "Límite de servicio",
     },
     specimensSection: {
       kicker: "Colección de referencia",
@@ -277,9 +317,15 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
     },
     errors: {
       invalidFileType:
-        "Seleccione un archivo de imagen válido (JPG, PNG, WEBP o GIF).",
-      loadFileError: "No se pudo cargar el archivo seleccionado.",
-      emptyStream: "Flujo de respuesta vacío desde el servidor.",
+        "Formato no válido. Sube únicamente imágenes JPG, PNG, WEBP o GIF (los archivos PDF deben exportarse primero como imagen).",
+      fileTooLarge:
+        "El archivo supera el tamaño máximo permitido (20 MB). Reduce la resolución e inténtalo de nuevo.",
+      loadFileError:
+        "No se pudo leer el archivo del folio. Verifica que no esté dañado o protegido.",
+      emptyStream:
+        "El servidor finalizó sin devolver texto de transcripción.",
+      networkError:
+        "Error de red al conectar con el servidor de transcripción. Comprueba tu conexión e inténtalo de nuevo.",
       unexpectedError:
         "Ocurrió un error inesperado durante la transcripción.",
     },
@@ -350,7 +396,7 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
         "This archival image could not be rendered. Drop a new manuscript scan here or upload a file.",
       selectFile: "Select Manuscript File",
       dropTitle: "Drop manuscript scan to inspect",
-      dropSubtitle: "Supports JPG, PNG, WEBP, and GIF archival images",
+      dropSubtitle: "Supports JPG, PNG, WEBP, and GIF archival images (max 20 MB)",
       replaceImage: "Replace Image",
     },
     desk: {
@@ -404,6 +450,26 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
       deriveAnalysis: "Historical Analysis",
       copyText: "Copy Text",
       copied: "Copied",
+    },
+    quota: {
+      available: "API Available",
+      rpmPaused: "Paused by rate limit",
+      rpdExhausted: "Daily quota exhausted",
+      sessionCountLabel: "Session folios",
+      rpmBannerTitle: "Per-minute rate limit reached",
+      rpmBannerBody:
+        "The API per-minute request limit was reached. Available again in {seconds} seconds…",
+      rpdBannerTitle: "Daily free quota exhausted",
+      rpdBannerBody:
+        "The daily free API transcription limit has been reached. You can continue tomorrow when the quota resets.",
+      rpdRecheck: "Check availability",
+      waitButton: "Wait {seconds}s",
+    },
+    toasts: {
+      dismiss: "Dismiss notification",
+      uploadFailedTitle: "Could not load folio",
+      networkErrorTitle: "Connection error",
+      rateLimitTitle: "Service limit",
     },
     specimensSection: {
       kicker: "Reference Collection",
@@ -467,9 +533,15 @@ export const TRANSLATIONS: Record<UiLang, UiDictionary> = {
     },
     errors: {
       invalidFileType:
-        "Please select a valid image file (JPG, PNG, WEBP, or GIF).",
-      loadFileError: "Unable to load selected file.",
-      emptyStream: "Empty response stream from server.",
+        "Invalid format. Please upload JPG, PNG, WEBP, or GIF images (PDF files must first be exported as an image).",
+      fileTooLarge:
+        "The file exceeds the maximum allowed size (20 MB). Please reduce its resolution and try again.",
+      loadFileError:
+        "Could not read the folio file. Verify that the file is not damaged or corrupted.",
+      emptyStream:
+        "Server completed without returning transcription text.",
+      networkError:
+        "Network error connecting to the transcription server. Check your connection and try again.",
       unexpectedError:
         "An unexpected error occurred during transcription.",
     },

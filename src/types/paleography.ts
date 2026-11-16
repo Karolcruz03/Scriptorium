@@ -12,6 +12,26 @@ export type OpticalFilter =
   | "bleed-reduction"
   | "inverted";
 
+export type QuotaStatus = "available" | "rpm_limited" | "rpd_exhausted";
+
+export type ErrorCode =
+  | "RATE_LIMIT_RPM"
+  | "QUOTA_EXHAUSTED_RPD"
+  | "FILE_TOO_LARGE"
+  | "UNSUPPORTED_FORMAT"
+  | "FILE_READ_FAILED"
+  | "NETWORK_ERROR"
+  | "API_KEY_INVALID"
+  | "EMPTY_OUTPUT"
+  | "TRANSCRIPTION_FAILED";
+
+export interface ToastNotification {
+  id: string;
+  title: string;
+  message: string;
+  variant: "error" | "warning" | "info";
+}
+
 export interface ManuscriptSpecimen {
   id: string;
   title: string;

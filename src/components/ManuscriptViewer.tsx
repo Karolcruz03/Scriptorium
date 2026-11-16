@@ -121,7 +121,7 @@ export const ManuscriptViewer: React.FC<ManuscriptViewerProps> = ({
     e.preventDefault();
     setIsFileHovering(false);
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith("image/")) {
+    if (file) {
       onFileSelected(file);
     }
   };

@@ -10,10 +10,14 @@ import {
   BookOpen,
   ListOrdered,
   AlertCircle,
+  AlertTriangle,
+  Clock,
+  RotateCcw,
 } from "lucide-react";
 import {
   ActiveDocument,
   LanguageHint,
+  QuotaStatus,
   TranscriptionMode,
 } from "../types/paleography";
 import { parseTranscriptionSections } from "../utils/image";
@@ -35,6 +39,10 @@ interface TranscriptionDeskProps {
   onTranscriptionTextChange: (val: string) => void;
   isStreaming: boolean;
   error: string | null;
+  quotaStatus: QuotaStatus;
+  rpmSecondsLeft: number;
+  sessionProcessedCount: number;
+  onResetQuotaStatus: () => void;
   onTranscribe: (overrideMode?: TranscriptionMode) => void;
   onStop: () => void;
   t: UiDictionary;
@@ -85,6 +93,10 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
   onTranscriptionTextChange,
   isStreaming,
   error,
+  quotaStatus,
+  rpmSecondsLeft,
+  sessionProcessedCount,
+  onResetQuotaStatus,
   onTranscribe,
   onStop,
   t,
@@ -93,6 +105,8 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(true);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+
+  const isTranscribeDisabled = isStreaming || quotaStatus !== "available";
 
   const parsed = useMemo(
     () => parseTranscriptionSections(transcriptionText),
@@ -146,6 +160,30 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
     window.document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  const primaryButtonLabel =
+    quotaStatus === "rpm_limited"
+      ? t.quota.waitButton.replace("{seconds}", String(rpmSecondsLeft))
+      : t.desk.transcribeFolio;
+
+  const statusIndicator =
+    quotaStatus === "rpd_exhausted"
+      ? {
+          dotClass: "bg-red-600",
+          textClass: "text-red-800",
+          label: t.quota.rpdExhausted,
+        }
+      : quotaStatus === "rpm_limited"
+        ? {
+            dotClass: "bg-amber-500",
+            textClass: "text-amber-800",
+            label: `${t.quota.rpmPaused} (${rpmSecondsLeft}s)`,
+          }
+        : {
+            dotClass: "bg-emerald-600",
+            textClass: "text-emerald-800",
+            label: t.quota.available,
+          };
 
   return (
     <section
@@ -236,14 +274,19 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
             ) : (
               <button
                 type="button"
+                disabled={isTranscribeDisabled}
                 onClick={() => {
                   setIsEditing(false);
                   onTranscribe();
                 }}
-                className="inline-flex h-9 items-center gap-1.5 rounded bg-[#8B2E14] px-4 text-xs font-semibold text-[#FBF9F5] transition-colors hover:bg-[#73240F] whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex h-9 items-center gap-1.5 rounded bg-[#8B2E14] px-4 text-xs font-semibold text-[#FBF9F5] transition-colors hover:bg-[#73240F] disabled:bg-stone-400 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
               >
-                <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-                <span>{t.desk.transcribeFolio}</span>
+                {quotaStatus === "rpm_limited" ? (
+                  <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                )}
+                <span>{primaryButtonLabel}</span>
               </button>
             )}
           </div>
@@ -293,9 +336,26 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
         )}
       </div>
 
-      {/* Secondary Reading Toolbar */}
-      <div className="flex items-center justify-between gap-4 border-b border-stone-200 bg-white px-4 py-2 text-xs text-stone-500">
-        <div className="flex items-center gap-3 tabular-nums">
+      {/* Quota Status & Secondary Reading Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-2 text-xs text-stone-500">
+        <div className="flex flex-wrap items-center gap-2.5 tabular-nums">
+          <span
+            className={`inline-flex items-center gap-1.5 font-medium ${statusIndicator.textClass}`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${statusIndicator.dotClass}`}
+              aria-hidden="true"
+            />
+            <span>{statusIndicator.label}</span>
+          </span>
+          <span aria-hidden="true">·</span>
+          <span>
+            {t.quota.sessionCountLabel}:{" "}
+            <strong className="font-semibold text-stone-700">
+              {sessionProcessedCount}
+            </strong>
+          </span>
+          <span aria-hidden="true">·</span>
           <span className="font-medium text-stone-700">
             {t.desk.editionLabels[mode]}
           </span>
@@ -348,7 +408,60 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
 
       {/* Main Transcription Sheet */}
       <div className="relative min-h-[440px] lg:h-[550px] flex-1 overflow-y-auto bg-[#FFFEFC] px-6 py-6">
-        {error && (
+        {/* Yellow Alert: Per-Minute Rate Limit (RPM) with Countdown */}
+        {quotaStatus === "rpm_limited" && (
+          <div
+            role="alert"
+            aria-live="polite"
+            className="mb-4 flex items-start gap-3 border border-amber-300 bg-amber-50/90 p-3.5 text-xs text-amber-950"
+          >
+            <AlertTriangle
+              className="mt-0.5 h-4 w-4 shrink-0 text-amber-700"
+              aria-hidden="true"
+            />
+            <div className="flex-1">
+              <p className="font-semibold">{t.quota.rpmBannerTitle}</p>
+              <p className="mt-0.5 leading-relaxed text-amber-900 tabular-nums">
+                {t.quota.rpmBannerBody.replace(
+                  "{seconds}",
+                  String(rpmSecondsLeft)
+                )}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Red Persistent Alert: Daily Free Quota Exhausted (RPD) */}
+        {quotaStatus === "rpd_exhausted" && (
+          <div
+            role="alert"
+            className="mb-4 flex flex-wrap items-start justify-between gap-3 border border-red-300 bg-red-50/90 p-4 text-xs text-red-950"
+          >
+            <div className="flex items-start gap-3 min-w-0 flex-1">
+              <AlertCircle
+                className="mt-0.5 h-4 w-4 shrink-0 text-red-700"
+                aria-hidden="true"
+              />
+              <div>
+                <p className="font-semibold">{t.quota.rpdBannerTitle}</p>
+                <p className="mt-0.5 leading-relaxed text-red-900">
+                  {t.quota.rpdBannerBody}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onResetQuotaStatus}
+              className="inline-flex items-center gap-1.5 rounded border border-red-300 bg-white px-2.5 py-1.5 text-xs font-medium text-red-900 transition-colors hover:bg-red-100 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+              <span>{t.quota.rpdRecheck}</span>
+            </button>
+          </div>
+        )}
+
+        {/* General Transcription Error Alert (non-quota errors) */}
+        {error && quotaStatus === "available" && (
           <div
             role="alert"
             className="mb-4 flex items-start gap-2.5 border border-red-200 bg-red-50/70 p-3.5 text-xs text-red-900"
@@ -364,7 +477,7 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
           </div>
         )}
 
-        {!transcriptionText && !isStreaming && !error && (
+        {!transcriptionText && !isStreaming && !error && quotaStatus === "available" && (
           <div className="flex h-full flex-col items-center justify-center text-center px-4">
             <BookOpen className="h-8 w-8 text-stone-300 mb-3" aria-hidden="true" />
             <h3 className="font-serif text-2xl font-medium text-[#1C1917]">
@@ -375,11 +488,36 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
             </p>
             <button
               type="button"
+              disabled={isTranscribeDisabled}
               onClick={() => onTranscribe()}
-              className="mt-5 inline-flex items-center gap-2 rounded-md bg-[#8B2E14] px-5 py-2.5 text-xs font-semibold text-[#FBF9F5] transition-colors hover:bg-[#73240F] cursor-pointer"
+              className="mt-5 inline-flex items-center gap-2 rounded-md bg-[#8B2E14] px-5 py-2.5 text-xs font-semibold text-[#FBF9F5] transition-colors hover:bg-[#73240F] disabled:bg-stone-400 disabled:cursor-not-allowed cursor-pointer"
             >
               <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
               <span>{t.desk.emptyCta}</span>
+            </button>
+          </div>
+        )}
+
+        {!transcriptionText && !isStreaming && quotaStatus !== "available" && (
+          <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+            <Clock className="h-7 w-7 text-stone-300 mb-2.5" aria-hidden="true" />
+            <p className="font-serif text-xl text-stone-700">
+              {quotaStatus === "rpm_limited"
+                ? t.quota.rpmBannerTitle
+                : t.quota.rpdBannerTitle}
+            </p>
+            <button
+              type="button"
+              disabled={isTranscribeDisabled}
+              onClick={() => onTranscribe()}
+              className="mt-4 inline-flex items-center gap-2 rounded-md bg-stone-300 px-5 py-2.5 text-xs font-semibold text-stone-700 cursor-not-allowed tabular-nums"
+            >
+              <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>
+                {quotaStatus === "rpm_limited"
+                  ? t.quota.waitButton.replace("{seconds}", String(rpmSecondsLeft))
+                  : t.quota.rpdExhausted}
+              </span>
             </button>
           </div>
         )}
@@ -463,31 +601,34 @@ export const TranscriptionDesk: React.FC<TranscriptionDeskProps> = ({
               </span>
               <button
                 type="button"
+                disabled={quotaStatus !== "available"}
                 onClick={() => {
                   onModeChange("normalized");
                   onTranscribe("normalized");
                 }}
-                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] whitespace-nowrap shrink-0 cursor-pointer"
+                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
               >
                 {t.desk.deriveNormalized}
               </button>
               <button
                 type="button"
+                disabled={quotaStatus !== "available"}
                 onClick={() => {
                   onModeChange("translation");
                   onTranscribe("translation");
                 }}
-                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] whitespace-nowrap shrink-0 cursor-pointer"
+                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
               >
                 {t.desk.deriveTranslate}
               </button>
               <button
                 type="button"
+                disabled={quotaStatus !== "available"}
                 onClick={() => {
                   onModeChange("analysis");
                   onTranscribe("analysis");
                 }}
-                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] whitespace-nowrap shrink-0 cursor-pointer"
+                className="rounded border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-300 hover:text-[#1C1917] disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer"
               >
                 {t.desk.deriveAnalysis}
               </button>
